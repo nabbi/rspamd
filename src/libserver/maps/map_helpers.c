@@ -149,6 +149,7 @@ rspamd_parse_kv_list(
 	};
 
 	char *c, *p, *key = NULL, *value = NULL, *stripped_key, *stripped_value, *end;
+	char *key_start = NULL;
 	struct rspamd_map *map = data->map;
 	unsigned int line_number = 0;
 
@@ -163,6 +164,8 @@ rspamd_parse_kv_list(
 				p++;
 			}
 			else {
+				key_start = p;
+
 				if (*p == '"') {
 					p++;
 					c = p;
@@ -467,6 +470,28 @@ rspamd_parse_kv_list(
 		}
 
 		data->state = map_skip_spaces_before_key;
+	}
+	else {
+		switch (data->state) {
+		case map_skip_spaces_after_key:
+		case map_read_value:
+			/*
+			 * The key is in a local variable that the next call does not
+			 * see, so the line would be dropped: give the whole line back
+			 */
+			g_free(key);
+			data->state = map_skip_spaces_before_key;
+
+			return key_start;
+		case map_skip_spaces_before_key:
+		case map_read_eol:
+		case map_skip_comment:
+		case map_read_comment_start:
+			/* c may still point at a value, which would come back as a key */
+			return p;
+		default:
+			break;
+		}
 	}
 
 	return c;

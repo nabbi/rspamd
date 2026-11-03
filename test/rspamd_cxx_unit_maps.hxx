@@ -141,6 +141,71 @@ TEST_SUITE("rspamd_maps")
 		cfg->libs_ctx = nullptr;
 		rspamd_config_free(cfg);
 	}
+
+	TEST_CASE("kv list keeps a line that a chunk ends in")
+	{
+		/*
+		 * read_map_file_chunks passes a file map in chunks and gives back
+		 * what the parser returns as unread with the next one. A chunk that
+		 * ended after a line's key used to lose that key: the line was
+		 * dropped ("empty or invalid key found on line 0").
+		 */
+		const std::string data =
+			"# comment\n"
+			"alpha.example ONE\n"
+			"\"quoted key\" TWO\n"
+			"beta.example\tTHREE # comment\n"
+			"keyonly.example\n"
+			"gamma.example    FOUR\n";
+		const std::vector<std::pair<std::string, std::string>> expected{
+			{"alpha.example", "ONE"},
+			{"quoted key", "TWO"},
+			{"beta.example", "THREE"},
+			{"keyonly.example", ""},
+			{"gamma.example", "FOUR"},
+		};
+
+		struct rspamd_map map;
+		memset(&map, 0, sizeof(map));
+		map.name = (char *) "test";
+		rspamd_strlcpy(map.tag, "test", sizeof(map.tag));
+
+		for (std::size_t split = 1; split < data.size(); split++) {
+			CAPTURE(split);
+			struct map_cb_data cbd;
+			memset(&cbd, 0, sizeof(cbd));
+			cbd.map = &map;
+
+			/* The first chunk, then what it left unread plus the rest */
+			std::string first = data.substr(0, split);
+			char *pos = rspamd_kv_list_read(first.data(), first.size(), &cbd, FALSE);
+			std::string second;
+
+			/* As read_map_file_chunks: kept only if inside the chunk */
+			if (pos && pos > first.data() && pos < first.data() + first.size()) {
+				second.assign(pos, first.data() + first.size());
+			}
+
+			second += data.substr(split);
+			rspamd_kv_list_read(second.data(), second.size(), &cbd, TRUE);
+
+			void *target = nullptr;
+			rspamd_kv_list_fin(&cbd, &target);
+			REQUIRE(target != nullptr);
+			auto *htb = (struct rspamd_hash_map_helper *) target;
+
+			CHECK(map.nelts == expected.size());
+
+			for (const auto &[k, v]: expected) {
+				CAPTURE(k);
+				auto *found = (const char *) rspamd_match_hash_map(htb, k.data(), k.size());
+				REQUIRE(found != nullptr);
+				CHECK(std::string{found} == v);
+			}
+
+			rspamd_map_helper_destroy_hash(htb);
+		}
+	}
 }
 
 #endif
